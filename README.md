@@ -2,6 +2,8 @@
 
 A Spring Boot REST API for managing employees, departments, leave types, leave balances, and leave requests. The backend uses PostgreSQL, Spring Data JPA, BCrypt password hashing, JWT authentication, role-based authorization, validation, optimistic locking, and a global API error contract.
 
+- **Frontend Repository:** [https://github.com/NishanthM1/employee-leave-frontend.git](https://github.com/NishanthM1/employee-leave-frontend.git)
+
 ## Key Features
 
 - Username/password login with JWT access tokens.
