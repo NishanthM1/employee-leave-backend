@@ -52,6 +52,7 @@ public class SecurityConfig {
                                 response.sendError(HttpServletResponse.SC_UNAUTHORIZED)))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/api/auth/**").permitAll()
+                        .requestMatchers("/api/ai/**").authenticated()
                         .requestMatchers(HttpMethod.POST, "/api/employees", "/api/departments", "/api/leave-types", "/api/leave-balances").hasRole("ADMIN")
                         .requestMatchers(HttpMethod.PUT, "/api/employees/*", "/api/leave-types/*").hasRole("ADMIN")
                         .requestMatchers(HttpMethod.PATCH, "/api/employees/*/deactivate", "/api/leave-types/*/deactivate").hasRole("ADMIN")

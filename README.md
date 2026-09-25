@@ -15,6 +15,7 @@ A Spring Boot REST API for managing employees, departments, leave types, leave b
 - Optimistic locking for leave requests and leave balances.
 - Typed business exceptions with consistent `400`, `401`, `403`, `404`, and `409` responses.
 - Cross-year leave rejection by design.
+- AI Leave Assistant for authenticated employees to query leave balances and request history.
 
 ## Tech Stack
 
@@ -25,6 +26,7 @@ A Spring Boot REST API for managing employees, departments, leave types, leave b
 - JSON Web Tokens via JJWT 0.12.6
 - Spring Data JPA and Hibernate
 - PostgreSQL
+- Google GenAI Java SDK (com.google.genai:google-genai 1.73.0)
 - Maven
 - JUnit, Spring Boot Test, MockMvc, and Spring Security Test
 
@@ -32,6 +34,7 @@ A Spring Boot REST API for managing employees, departments, leave types, leave b
 
 ```text
 src/main/java/com/example/employee_leave_backend/
+├── ai/              AI chat controller, Gemini client, and prompt context
 ├── config/          Development-only data initialization
 ├── controller/      REST endpoints
 ├── dto/             Validated request and response models
@@ -154,6 +157,8 @@ DATABASE_USERNAME=your_database_user
 DATABASE_PASSWORD=your_database_password
 JWT_SECRET=replace-with-a-random-secret-at-least-32-characters-long
 FRONTEND_URL=http://localhost:3000
+GEMINI_API_KEY=your_key_here
+GEMINI_MODEL=gemini-flash-latest
 ```
 
 Generate a strong local JWT secret, for example:
@@ -162,7 +167,7 @@ Generate a strong local JWT secret, for example:
 openssl rand -base64 48
 ```
 
-`.env` is ignored by Git. Never commit real database credentials or JWT secrets.
+`.env` is ignored by Git. Never commit real database credentials, JWT secrets, or Gemini API keys.
 
 The default `JPA_DDL_AUTO` value is `validate`; Hibernate verifies the schema but does not modify it. Use `JPA_DDL_AUTO=update` only for intentional local development schema changes.
 
@@ -301,6 +306,91 @@ The server verifies that `employeeId` belongs to the authenticated employee and 
 PATCH /api/leave-requests/42/reject?rejectionReason=Insufficient%20coverage
 ```
 
+## AI Leave Assistant
+
+### Purpose
+The AI Leave Assistant provides an interactive, read-only assistant for authenticated employees. It helps employees query their own leave balances, check recent request history, and answer leave-related questions using only their available records in the system.
+
+### Endpoint
+
+| Method | URL | Role | Purpose |
+|---|---|---|---|
+| `POST` | `/api/ai/chat` | Authenticated employee | Ask leave-related questions using the authenticated employee's context. |
+
+#### Request Example
+
+```json
+{
+  "message": "How many casual leaves do I have?"
+}
+```
+
+#### Response Example
+
+```json
+{
+  "reply": "You have 9 casual leave days available out of your 12 total days for 2026 (3 days used)."
+}
+```
+
+### Authentication and Access Control
+- **Requires JWT authentication**: Access to `/api/ai/**` requires a valid Bearer token in the `Authorization` header.
+- **Identity from authenticated JWT**: The employee identity is determined solely from the authenticated JWT user (`Authentication.getName()`).
+- **No client employee selection**: The request body accepts only `message`. It does not accept an `employeeId` parameter.
+- **Strict context isolation**: The AI context is strictly restricted to the authenticated employee. Mentioning another employee's name or ID in the message does not include that employee's data in the model context.
+
+### Gemini Integration
+- **SDK**: Built with the official Google GenAI Java SDK (`com.google.genai:google-genai` version `1.73.0`).
+- **Model**: Configured via the `GEMINI_MODEL` environment variable (mapped via `app.ai.gemini-model`, defaulting to `gemini-flash-latest`).
+
+### Environment Configuration
+
+Add the following to your local `.env`:
+
+```properties
+GEMINI_API_KEY=your_key_here
+GEMINI_MODEL=gemini-flash-latest
+```
+
+> [!CAUTION]
+> The real `GEMINI_API_KEY` belongs only in the local `.env` and must never be committed to source control. The repository `.gitignore` ignores `.env` by default.
+
+### Employee Context
+When generating responses, the backend builds a prompt containing only verified records for the authenticated employee:
+- **Employee Information**: Employee name (`name`), employee code (`employeeCode`), and department name (`department.name`).
+- **Leave Balances**: Current balances for all assigned leave types: leave type name (`leaveType.name`), year (`year`), total allocated days (`totalDays`), used days (`usedDays`), and available days (`totalDays - usedDays`).
+- **Leave Request Information**: Up to 12 most recent leave requests (sorted by start date and creation timestamp descending): leave type name, start date (`startDate`), end date (`endDate`), calculated days (`days`), status (`status`, e.g. `PENDING`, `APPROVED`, `REJECTED`, `CANCELLED`), and rejection reason (`rejectionReason`) if present.
+
+System instructions strictly require the assistant to rely exclusively on this context and never invent balances, requests, dates, leave types, or company policies.
+
+### AI Safety and Limitations
+- **Read-only**: The AI assistant is strictly informational and read-only.
+- **No approvals or rejections**: It does not approve leave and does not reject leave.
+- **No balance modifications**: It does not modify leave balances.
+- **No request creation or cancellation**: It does not create or cancel leave requests.
+- **Authoritative business logic**: If an employee requests to take leave, the assistant directs them to use the standard Apply Leave feature. Existing backend validation rules and database constraints remain authoritative.
+- **Privacy boundary**: The AI assistant must not expose another employee's information.
+
+### Error Behavior
+- **401 Unauthorized**: Returned when an unauthenticated request attempts to access `/api/ai/chat`.
+- **400 Bad Request**: Returned if the request body is missing or the `message` field is blank.
+- **404 Not Found**: Returned if the authenticated user has no linked employee profile record.
+- **503 Service Unavailable**: If `GEMINI_API_KEY` is not configured or an upstream Gemini API call fails, the application catches `AiServiceException` and returns a sanitized error response:
+  ```json
+  {
+    "status": 503,
+    "message": "AI service is temporarily unavailable",
+    "timestamp": "2026-09-25T12:00:00"
+  }
+  ```
+  Internal stack traces, Gemini SDK details, and API keys are never leaked to the client.
+
+### Example Questions
+- How many casual leaves do I have?
+- What are my pending leave requests?
+- What leaves have I taken this year?
+- What is my department?
+
 ## Error Responses
 
 Errors use the `ApiError` shape:
@@ -320,12 +410,13 @@ Typical statuses:
 - `403 Forbidden`: ownership violation, role restriction, or manager cross-department access.
 - `404 Not Found`: requested employee, department, leave type, balance, or leave request does not exist.
 - `409 Conflict`: duplicate data, overlap conflict, database constraint conflict, or optimistic-lock conflict.
+- `503 Service Unavailable`: AI service is temporarily unavailable due to unconfigured API key or upstream provider error.
 
 Unexpected server errors return a generic `500 Internal Server Error` message without SQL details or stack traces.
 
 ## Testing
 
-The project contains 55 automated tests covering employee, manager, admin, JWT, authorization, error handling, deactivation, schema validation, and optimistic locking.
+The project contains 60 automated tests covering employee, manager, admin, JWT, authorization, error handling, deactivation, schema validation, optimistic locking, and AI leave assistant context security.
 
 Run the complete suite with:
 
@@ -337,11 +428,13 @@ Run the complete suite with:
 
 - JWT signing uses the `JWT_SECRET` environment variable.
 - Database URL, username, and password are environment-configured.
+- Gemini API key is environment-configured via `GEMINI_API_KEY` and never stored in code or committed.
 - `.env` is ignored by Git; `.env.example` contains placeholders only.
 - BCrypt is used for stored passwords.
 - Inactive employees cannot log in or use existing JWTs.
 - Manager request visibility and approval/rejection are restricted to the manager's department.
 - Admin, manager, and employee endpoint restrictions are enforced by Spring Security and service-level ownership checks.
+- AI chat context is restricted strictly to the authenticated employee's data; requests cannot select or expose other employees.
 - JWT role claims are not trusted for privilege escalation; authorities are loaded from the database user.
 
 ## License and Project Metadata

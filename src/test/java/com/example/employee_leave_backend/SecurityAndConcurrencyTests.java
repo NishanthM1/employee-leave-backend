@@ -37,8 +37,15 @@ import java.util.Date;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+import static org.springframework.http.MediaType.APPLICATION_JSON;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static io.jsonwebtoken.Jwts.builder;
 import static io.jsonwebtoken.security.Keys.hmacShaKeyFor;
 
@@ -199,6 +206,28 @@ class SecurityAndConcurrencyTests {
         mockMvc.perform(get("/api/employees")
                         .header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
                 .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void aiChatRequiresAuthentication() throws Exception {
+        mockMvc.perform(post("/api/ai/chat")
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"message\":\"Hello\"}"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void authenticatedAiChatReturnsSafeUnavailableResponseWhenGeminiIsNotConfigured()
+            throws Exception {
+        String token = jwtService.generateToken(employeeUser.getUsername(), "EMPLOYEE");
+
+        mockMvc.perform(post("/api/ai/chat")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"message\":\"Hello\"}"))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.message")
+                        .value("AI service is temporarily unavailable"));
     }
 
         @Test

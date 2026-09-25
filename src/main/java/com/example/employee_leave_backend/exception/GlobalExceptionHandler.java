@@ -49,6 +49,11 @@ public class GlobalExceptionHandler {
         return error(HttpStatus.CONFLICT, exception.getMessage());
     }
 
+    @ExceptionHandler(AiServiceException.class)
+    public ResponseEntity<ApiError> handleAiService(AiServiceException exception) {
+        return error(HttpStatus.SERVICE_UNAVAILABLE, "AI service is temporarily unavailable");
+    }
+
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ApiError> handleValidation(MethodArgumentNotValidException exception) {
         String message = exception.getBindingResult().getFieldErrors().stream()
